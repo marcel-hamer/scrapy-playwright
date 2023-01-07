@@ -268,6 +268,7 @@ class ScrapyPlaywrightDownloadHandler(HTTPDownloadHandler):
         await page.route(
             "**",
             self._make_request_handler(
+                context_name=request.meta.get("playwright_context") or DEFAULT_CONTEXT_NAME,
                 method=request.method,
                 url=request.url,
                 headers=request.headers,
@@ -401,6 +402,7 @@ class ScrapyPlaywrightDownloadHandler(HTTPDownloadHandler):
 
     def _make_request_handler(
         self,
+        context_name: str,
         method: str,
         url: str,
         headers: Headers,
@@ -413,6 +415,12 @@ class ScrapyPlaywrightDownloadHandler(HTTPDownloadHandler):
                 should_abort = await _maybe_await(self.abort_request(playwright_request))
                 if should_abort:
                     await route.abort()
+                    logger.debug(
+                        "[Context=%s] Aborted request <%s %s>",
+                        context_name,
+                        playwright_request.method.upper(),
+                        playwright_request.url,
+                    )
                     self.stats.inc_value("playwright/request_count/aborted")
                     return None
 
@@ -433,12 +441,20 @@ class ScrapyPlaywrightDownloadHandler(HTTPDownloadHandler):
 
             # if the request is triggered by scrapy, not playwright
             if playwright_request.url == url:
-                overrides["method"] = method
+                if method.upper() != playwright_request.method.upper():
+                    overrides["method"] = method
                 if body:
                     overrides["post_data"] = body.decode(encoding)
 
             try:
                 await route.continue_(**overrides)
+                if overrides.get("method"):
+                    logger.debug(
+                        "[Context=%s] Overridden method for request <%s %s>",
+                        context_name,
+                        overrides["method"],
+                        playwright_request.url,
+                    )
             except Exception as ex:
                 if _is_safe_close_error(ex):
                     logger.warning(
