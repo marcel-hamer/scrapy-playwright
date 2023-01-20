@@ -381,37 +381,46 @@ class ScrapyPlaywrightDownloadHandler(HTTPDownloadHandler):
         page_methods = request.meta.get("playwright_page_methods") or ()
         if isinstance(page_methods, dict):
             page_methods = page_methods.values()
-        for pm in page_methods:
-            if isinstance(pm, PageMethod):
-                try:
-                    method = getattr(page, pm.method)
-                except AttributeError as ex:
+
+        for methods in page_methods:
+            target = page
+
+            if isinstance(methods, PageMethod):
+                methods = [methods]
+
+            for pm in methods:
+                if isinstance(pm, PageMethod):
+                    try:
+                        method = getattr(target, pm.method)
+                    except AttributeError as ex:
+                        logger.warning(
+                            "Ignoring %r: could not find method",
+                            pm,
+                            extra={
+                                "spider": spider,
+                                "context_name": context_name,
+                                "scrapy_request_url": request.url,
+                                "scrapy_request_method": request.method,
+                                "exception": ex,
+                            },
+                        )
+                    else:
+                        target = await _maybe_await(method(*pm.args, **pm.kwargs))
+                        await page.wait_for_load_state(timeout=self.default_navigation_timeout)
+                else:
                     logger.warning(
-                        "Ignoring %r: could not find method",
+                        "Ignoring %r: expected PageMethod, got %r",
                         pm,
+                        type(pm),
                         extra={
                             "spider": spider,
                             "context_name": context_name,
                             "scrapy_request_url": request.url,
                             "scrapy_request_method": request.method,
-                            "exception": ex,
                         },
                     )
-                else:
-                    pm.result = await _maybe_await(method(*pm.args, **pm.kwargs))
-                    await page.wait_for_load_state(timeout=self.default_navigation_timeout)
-            else:
-                logger.warning(
-                    "Ignoring %r: expected PageMethod, got %r",
-                    pm,
-                    type(pm),
-                    extra={
-                        "spider": spider,
-                        "context_name": context_name,
-                        "scrapy_request_url": request.url,
-                        "scrapy_request_method": request.method,
-                    },
-                )
+
+        pm.result = target
 
     def _increment_request_stats(self, request: PlaywrightRequest) -> None:
         stats_prefix = "playwright/request_count"
